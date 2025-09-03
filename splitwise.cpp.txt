@@ -1,0 +1,447 @@
+#include <iostream>
+#include <unordered_map>
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <queue>
+#include <stack>
+#include <fstream>
+#include <sstream>
+#include <iomanip>
+#include <ctime>
+#include <limits>
+
+class Transaction {
+public:
+    std::string payer;
+    double amount;
+    std::vector<std::string> beneficiaries;
+    std::string description;
+    std::time_t timestamp;
+    
+    Transaction(const std::string& p, double amt, const std::vector<std::string>& ben, const std::string& desc = "")
+        : payer(p), amount(amt), beneficiaries(ben), description(desc) {
+        timestamp = std::time(nullptr);
+    }
+};
+
+class Settlement {
+public:
+    std::string from;
+    std::string to;
+    double amount;
+    
+    Settlement(const std::string& f, const std::string& t, double amt) 
+        : from(f), to(t), amount(amt) {}
+};
+
+class CashFlowMinimizer {
+private:
+    std::unordered_map<std::string, double> balances;
+    std::vector<Transaction> transactionHistory;
+    std::stack<Transaction> undoStack;
+    std::string currentGroup;
+    
+    // Utility function to split string by delimiter
+    std::vector<std::string> split(const std::string& str, char delimiter) {
+        std::vector<std::string> tokens;
+        std::stringstream ss(str);
+        std::string token;
+        while (std::getline(ss, token, delimiter)) {
+            // Trim whitespace
+            token.erase(0, token.find_first_not_of(" \t"));
+            token.erase(token.find_last_not_of(" \t") + 1);
+            if (!token.empty()) {
+                tokens.push_back(token);
+            }
+        }
+        return tokens;
+    }
+    
+    // Update balances based on transaction
+    void updateBalances(const Transaction& txn) {
+        double splitAmount = txn.amount / (txn.beneficiaries.size() + 1); // +1 for payer
+        
+        // Payer gets credited (paid more than their share)
+        balances[txn.payer] += txn.amount - splitAmount;
+        
+        // Each beneficiary owes their share
+        for (const auto& beneficiary : txn.beneficiaries) {
+            balances[beneficiary] -= splitAmount;
+        }
+    }
+    
+public:
+    CashFlowMinimizer(const std::string& group = "Default") : currentGroup(group) {}
+    
+    // Add a new transaction
+    bool addTransaction(const std::string& payer, double amount, 
+                       const std::vector<std::string>& beneficiaries, 
+                       const std::string& description = "") {
+        if (amount <= 0) {
+            std::cout << "❌ Amount must be positive!\n";
+            return false;
+        }
+        
+        if (beneficiaries.empty()) {
+            std::cout << "❌ Must have at least one beneficiary!\n";
+            return false;
+        }
+        
+        Transaction txn(payer, amount, beneficiaries, description);
+        transactionHistory.push_back(txn);
+        undoStack.push(txn);
+        updateBalances(txn);
+        
+        std::cout << "✅ Transaction added successfully!\n";
+        return true;
+    }
+    
+    // Undo last transaction
+    bool undoLastTransaction() {
+        if (undoStack.empty()) {
+            std::cout << "❌ No transactions to undo!\n";
+            return false;
+        }
+        
+        Transaction lastTxn = undoStack.top();
+        undoStack.pop();
+        
+        // Reverse the balance updates
+        double splitAmount = lastTxn.amount / (lastTxn.beneficiaries.size() + 1);
+        balances[lastTxn.payer] -= (lastTxn.amount - splitAmount);
+        
+        for (const auto& beneficiary : lastTxn.beneficiaries) {
+            balances[beneficiary] += splitAmount;
+        }
+        
+        // Remove from history
+        transactionHistory.pop_back();
+        
+        std::cout << "✅ Last transaction undone!\n";
+        return true;
+    }
+    
+    // Display current balances
+    void showBalances() {
+        std::cout << "\n💰 CURRENT BALANCES - Group: " << currentGroup << "\n";
+        std::cout << std::string(50, '=') << "\n";
+        
+        if (balances.empty()) {
+            std::cout << "No transactions recorded yet.\n";
+            return;
+        }
+        
+        std::vector<std::pair<std::string, double>> sortedBalances;
+        for (const auto& pair : balances) {
+            if (std::abs(pair.second) > 0.01) { // Ignore very small amounts
+                sortedBalances.push_back(pair);
+            }
+        }
+        
+        std::sort(sortedBalances.begin(), sortedBalances.end(), 
+                 [](const auto& a, const auto& b) { return a.second > b.second; });
+        
+        for (const auto& pair : sortedBalances) {
+            std::cout << std::setw(15) << pair.first << ": ";
+            if (pair.second > 0) {
+                std::cout << "🟢 Gets Rs." << std::fixed << std::setprecision(2) << pair.second;
+            } else {
+                std::cout << "🔴 Owes Rs." << std::fixed << std::setprecision(2) << -pair.second;
+            }
+            std::cout << "\n";
+        }
+        std::cout << std::string(50, '=') << "\n";
+    }
+    
+    // Core algorithm: Minimize cash flow using greedy approach with priority queues
+    std::vector<Settlement> minimizeTransactions() {
+        std::vector<Settlement> settlements;
+        
+        // Create max heap for creditors (people who should receive money)
+        std::priority_queue<std::pair<double, std::string>> creditors;
+        
+        // Create max heap for debtors (people who owe money) - use negative values
+        std::priority_queue<std::pair<double, std::string>> debtors;
+        
+        // Populate heaps
+        for (const auto& pair : balances) {
+            if (pair.second > 0.01) {
+                creditors.push({pair.second, pair.first});
+            } else if (pair.second < -0.01) {
+                debtors.push({-pair.second, pair.first}); // Store positive value
+            }
+        }
+        
+        // Greedy matching algorithm
+        while (!creditors.empty() && !debtors.empty()) {
+            auto maxCreditor = creditors.top(); creditors.pop();
+            auto maxDebtor = debtors.top(); debtors.pop();
+            
+            double creditorAmount = maxCreditor.first;
+            double debtorAmount = maxDebtor.first;
+            std::string creditorName = maxCreditor.second;
+            std::string debtorName = maxDebtor.second;
+            
+            double settlementAmount = std::min(creditorAmount, debtorAmount);
+            
+            settlements.emplace_back(debtorName, creditorName, settlementAmount);
+            
+            // Update remaining amounts and push back if not settled
+            creditorAmount -= settlementAmount;
+            debtorAmount -= settlementAmount;
+            
+            if (creditorAmount > 0.01) {
+                creditors.push({creditorAmount, creditorName});
+            }
+            if (debtorAmount > 0.01) {
+                debtors.push({debtorAmount, debtorName});
+            }
+        }
+        
+        return settlements;
+    }
+    
+    // Display optimized settlements
+    void showOptimizedSettlements() {
+        auto settlements = minimizeTransactions();
+        
+        std::cout << "\n🎯 OPTIMIZED SETTLEMENTS\n";
+        std::cout << std::string(50, '=') << "\n";
+        
+        if (settlements.empty()) {
+            std::cout << "✅ All debts are already settled!\n";
+            return;
+        }
+        
+        std::cout << "Minimum " << settlements.size() << " transaction(s) needed:\n\n";
+        
+        int count = 1;
+        for (const auto& settlement : settlements) {
+            std::cout << count++ << ". " << settlement.from << " → " << settlement.to 
+                      << ": Rs." << std::fixed << std::setprecision(2) << settlement.amount << "\n";
+        }
+        
+        std::cout << "\n💡 This reduces complexity from potentially " 
+                  << balances.size() * (balances.size() - 1) / 2 
+                  << " to just " << settlements.size() << " transactions!\n";
+        std::cout << std::string(50, '=') << "\n";
+    }
+    
+    // Show transaction history
+    void showTransactionHistory() {
+        std::cout << "\n📋 TRANSACTION HISTORY\n";
+        std::cout << std::string(60, '=') << "\n";
+        
+        if (transactionHistory.empty()) {
+            std::cout << "No transactions recorded.\n";
+            return;
+        }
+        
+        for (size_t i = 0; i < transactionHistory.size(); ++i) {
+            const auto& txn = transactionHistory[i];
+            std::cout << i + 1 << ". ";
+            std::cout << txn.payer << " paid Rs." << std::fixed << std::setprecision(2) << txn.amount;
+            std::cout << " for: ";
+            
+            for (size_t j = 0; j < txn.beneficiaries.size(); ++j) {
+                std::cout << txn.beneficiaries[j];
+                if (j < txn.beneficiaries.size() - 1) std::cout << ", ";
+            }
+            
+            if (!txn.description.empty()) {
+                std::cout << " (" << txn.description << ")";
+            }
+            
+            std::cout << "\n";
+        }
+        std::cout << std::string(60, '=') << "\n";
+    }
+    
+    // Save data to file
+    bool saveToFile(const std::string& filename) {
+        std::ofstream file(filename);
+        if (!file.is_open()) {
+            std::cout << "❌ Error opening file for writing!\n";
+            return false;
+        }
+        
+        file << "GROUP:" << currentGroup << "\n";
+        
+        for (const auto& txn : transactionHistory) {
+            file << "TXN:" << txn.payer << "|" << txn.amount << "|";
+            for (size_t i = 0; i < txn.beneficiaries.size(); ++i) {
+                file << txn.beneficiaries[i];
+                if (i < txn.beneficiaries.size() - 1) file << ",";
+            }
+            file << "|" << txn.description << "\n";
+        }
+        
+        file.close();
+        std::cout << "✅ Data saved to " << filename << "\n";
+        return true;
+    }
+    
+    // Load data from file
+    bool loadFromFile(const std::string& filename) {
+        std::ifstream file(filename);
+        if (!file.is_open()) {
+            std::cout << "❌ Error opening file for reading!\n";
+            return false;
+        }
+        
+        // Clear current state
+        balances.clear();
+        transactionHistory.clear();
+        
+        std::string line;
+        while (std::getline(file, line)) {
+            if (line.substr(0, 6) == "GROUP:") {
+                currentGroup = line.substr(6);
+            } else if (line.substr(0, 4) == "TXN:") {
+                std::string txnData = line.substr(4);
+                auto parts = split(txnData, '|');
+                
+                if (parts.size() >= 3) {
+                    std::string payer = parts[0];
+                    double amount = std::stod(parts[1]);
+                    auto beneficiaries = split(parts[2], ',');
+                    std::string description = (parts.size() > 3) ? parts[3] : "";
+                    
+                    addTransaction(payer, amount, beneficiaries, description);
+                }
+            }
+        }
+        
+        file.close();
+        std::cout << "✅ Data loaded from " << filename << "\n";
+        return true;
+    }
+    
+    // Interactive CLI
+    void runInteractiveCLI() {
+        std::cout << "\n🎉 Welcome to Splitwise Cash Flow Minimizer!\n";
+        std::cout << "Group: " << currentGroup << "\n";
+        std::cout << std::string(50, '=') << "\n";
+        
+        while (true) {
+            std::cout << "\n📋 MENU:\n";
+            std::cout << "1. Add Transaction\n";
+            std::cout << "2. Show Balances\n";
+            std::cout << "3. Show Optimized Settlements\n";
+            std::cout << "4. Show Transaction History\n";
+            std::cout << "5. Undo Last Transaction\n";
+            std::cout << "6. Save to File\n";
+            std::cout << "7. Load from File\n";
+            std::cout << "8. Exit\n";
+            std::cout << "\nEnter your choice (1-8): ";
+            
+            int choice;
+            std::cin >> choice;
+            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            
+            switch (choice) {
+                case 1: {
+                    std::string payer, beneficiariesStr, description;
+                    double amount;
+                    
+                    std::cout << "Enter payer name: ";
+                    std::getline(std::cin, payer);
+                    
+                    std::cout << "Enter amount: Rs.";
+                    std::cin >> amount;
+                    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+                    
+                    std::cout << "Enter beneficiaries (comma-separated): ";
+                    std::getline(std::cin, beneficiariesStr);
+                    auto beneficiaries = split(beneficiariesStr, ',');
+                    
+                    std::cout << "Enter description (optional): ";
+                    std::getline(std::cin, description);
+                    
+                    addTransaction(payer, amount, beneficiaries, description);
+                    break;
+                }
+                case 2:
+                    showBalances();
+                    break;
+                case 3:
+                    showOptimizedSettlements();
+                    break;
+                case 4:
+                    showTransactionHistory();
+                    break;
+                case 5:
+                    undoLastTransaction();
+                    break;
+                case 6: {
+                    std::string filename;
+                    std::cout << "Enter filename to save: ";
+                    std::getline(std::cin, filename);
+                    saveToFile(filename);
+                    break;
+                }
+                case 7: {
+                    std::string filename;
+                    std::cout << "Enter filename to load: ";
+                    std::getline(std::cin, filename);
+                    loadFromFile(filename);
+                    break;
+                }
+                case 8:
+                    std::cout << "👋 Thanks for using Cash Flow Minimizer!\n";
+                    return;
+                default:
+                    std::cout << "❌ Invalid choice! Please try again.\n";
+            }
+        }
+    }
+};
+
+// Demo function to showcase features
+void runDemo() {
+    CashFlowMinimizer minimizer("Friends Trip");
+    
+    std::cout << "\n🎪 DEMO: Friend Trip Expenses\n";
+    std::cout << std::string(50, '=') << "\n";
+    
+    // Add sample transactions
+    minimizer.addTransaction("Alice", 1200, {"Bob", "Charlie"}, "Hotel booking");
+    minimizer.addTransaction("Bob", 900, {"Alice", "Charlie"}, "Food expenses");
+    minimizer.addTransaction("Charlie", 600, {"Alice", "Bob"}, "Transportation");
+    minimizer.addTransaction("Alice", 300, {"Bob"}, "Movie tickets");
+    
+    minimizer.showBalances();
+    minimizer.showOptimizedSettlements();
+    minimizer.showTransactionHistory();
+}
+
+int main() {
+    std::cout << "🏦 SPLITWISE CASH FLOW MINIMIZER\n";
+    std::cout << "Advanced C++ Project with Graph Algorithms\n";
+    std::cout << std::string(50, '=') << "\n";
+    
+    int mode;
+    std::cout << "Choose mode:\n";
+    std::cout << "1. Interactive Mode\n";
+    std::cout << "2. Demo Mode\n";
+    std::cout << "Enter choice (1-2): ";
+    std::cin >> mode;
+    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+    
+    if (mode == 1) {
+        std::string groupName;
+        std::cout << "Enter group name (or press Enter for 'Default'): ";
+        std::getline(std::cin, groupName);
+        if (groupName.empty()) groupName = "Default";
+        
+        CashFlowMinimizer minimizer(groupName);
+        minimizer.runInteractiveCLI();
+    } else if (mode == 2) {
+        runDemo();
+    } else {
+        std::cout << "Invalid choice!\n";
+    }
+    
+    return 0;
+}
