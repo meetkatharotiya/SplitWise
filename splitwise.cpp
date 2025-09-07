@@ -1,447 +1,890 @@
 #include <iostream>
-#include <unordered_map>
 #include <vector>
+#include <map>
 #include <string>
 #include <algorithm>
-#include <queue>
-#include <stack>
-#include <fstream>
-#include <sstream>
 #include <iomanip>
+#include <sstream>
 #include <ctime>
 #include <limits>
+#include <bits/stdc++.h>
 
-class Transaction {
-public:
-    std::string payer;
+using namespace std;
+
+enum SplitType
+{
+    EQUAL,
+    PERCENTAGE,
+    CUSTOM_WEIGHT
+};
+
+struct Transaction
+{
+    int id;
+    string payer;
     double amount;
-    std::vector<std::string> beneficiaries;
-    std::string description;
-    std::time_t timestamp;
-    
-    Transaction(const std::string& p, double amt, const std::vector<std::string>& ben, const std::string& desc = "")
-        : payer(p), amount(amt), beneficiaries(ben), description(desc) {
-        timestamp = std::time(nullptr);
+    vector<string> participants;
+    vector<double> weights; // For custom splits
+    SplitType splitType;
+    string description;
+    string date;
+    string groupName; // Empty for personal transactions
+    bool isSettled;
+
+    Transaction(int _id, string _payer, double _amount, vector<string> _participants,
+                string _description, string _groupName = "", SplitType _splitType = EQUAL,
+                vector<double> _weights = {})
+        : id(_id), payer(_payer), amount(_amount), participants(_participants),
+          description(_description), groupName(_groupName), splitType(_splitType),
+          weights(_weights), isSettled(false)
+    {
+
+        // Get current date
+        time_t now = time(0);
+        char *dt = ctime(&now);
+        date = string(dt);
+        date.pop_back(); // Remove newline
     }
 };
 
-class Settlement {
-public:
-    std::string from;
-    std::string to;
+struct Settlement
+{
+    int transactionId;
+    string from;
+    string to;
     double amount;
-    
-    Settlement(const std::string& f, const std::string& t, double amt) 
-        : from(f), to(t), amount(amt) {}
+    string date;
+    string groupName;
+
+    Settlement(int _transactionId, string _from, string _to, double _amount, string _groupName = "")
+        : transactionId(_transactionId), from(_from), to(_to), amount(_amount), groupName(_groupName)
+    {
+        time_t now = time(0);
+        char *dt = ctime(&now);
+        date = string(dt);
+        date.pop_back(); // Remove newline
+    }
 };
 
-class CashFlowMinimizer {
+class SplitWiseApp
+{
 private:
-    std::unordered_map<std::string, double> balances;
-    std::vector<Transaction> transactionHistory;
-    std::stack<Transaction> undoStack;
-    std::string currentGroup;
-    
-    // Utility function to split string by delimiter
-    std::vector<std::string> split(const std::string& str, char delimiter) {
-        std::vector<std::string> tokens;
-        std::stringstream ss(str);
-        std::string token;
-        while (std::getline(ss, token, delimiter)) {
-            // Trim whitespace
-            token.erase(0, token.find_first_not_of(" \t"));
-            token.erase(token.find_last_not_of(" \t") + 1);
-            if (!token.empty()) {
-                tokens.push_back(token);
-            }
-        }
-        return tokens;
-    }
-    
-    // Update balances based on transaction
-    void updateBalances(const Transaction& txn) {
-        double splitAmount = txn.amount / (txn.beneficiaries.size() + 1); // +1 for payer
-        
-        // Payer gets credited (paid more than their share)
-        balances[txn.payer] += txn.amount - splitAmount;
-        
-        // Each beneficiary owes their share
-        for (const auto& beneficiary : txn.beneficiaries) {
-            balances[beneficiary] -= splitAmount;
-        }
-    }
-    
+    vector<Transaction> transactions;
+    vector<Settlement> settlements;
+    vector<string> groups;
+    int nextTransactionId;
+
 public:
-    CashFlowMinimizer(const std::string& group = "Default") : currentGroup(group) {}
-    
-    // Add a new transaction
-    bool addTransaction(const std::string& payer, double amount, 
-                       const std::vector<std::string>& beneficiaries, 
-                       const std::string& description = "") {
-        if (amount <= 0) {
-            std::cout << "❌ Amount must be positive!\n";
-            return false;
+    SplitWiseApp() : nextTransactionId(1) {}
+
+    void addTransaction()
+    {
+        cout << "\n--- Add Transaction ---\n";
+
+        string payer, description, groupChoice;
+        double amount;
+        vector<string> participants;
+
+        cout << "Enter payer name: ";
+        cin.ignore();
+        getline(cin, payer);
+
+        cout << "Enter amount: Rs.";
+        cin >> amount;
+
+        cout << "Enter description: ";
+        cin.ignore();
+        getline(cin, description);
+
+        cout << "Is this a group transaction? (y/n): ";
+        char isGroup;
+        cin >> isGroup;
+
+        string groupName = "";
+        if (tolower(isGroup) == 'y')
+        {
+            cout << "Available groups: ";
+            for (const auto &group : groups)
+            {
+                cout << group << " ";
+            }
+            cout << "\nEnter group name (or create new): ";
+            cin.ignore();
+            getline(cin, groupName);
+
+            // Add group if doesn't exist
+            if (find(groups.begin(), groups.end(), groupName) == groups.end())
+            {
+                groups.push_back(groupName);
+                cout << "Created new group: " << groupName << "\n";
+            }
         }
-        
-        if (beneficiaries.empty()) {
-            std::cout << "❌ Must have at least one beneficiary!\n";
-            return false;
+
+        cout << "Enter participants (comma separated): ";
+        cin.ignore();
+        string participantInput;
+        getline(cin, participantInput);
+
+        // Parse participants
+        stringstream ss(participantInput);
+        string participant;
+        while (getline(ss, participant, ','))
+        {
+            // Trim whitespace
+            participant.erase(0, participant.find_first_not_of(" \t"));
+            participant.erase(participant.find_last_not_of(" \t") + 1);
+            if (!participant.empty())
+            {
+                participants.push_back(participant);
+            }
         }
-        
-        Transaction txn(payer, amount, beneficiaries, description);
-        transactionHistory.push_back(txn);
-        undoStack.push(txn);
-        updateBalances(txn);
-        
-        std::cout << "✅ Transaction added successfully!\n";
-        return true;
+
+        // Add payer to participants if not already included
+        if (find(participants.begin(), participants.end(), payer) == participants.end())
+        {
+            participants.push_back(payer);
+        }
+
+        // Choose split type
+        SplitType splitType = EQUAL;
+        vector<double> weights;
+
+        cout << "Choose split type:\n";
+        cout << "1. Equal split\n";
+        cout << "2. Percentage split\n";
+        cout << "3. Custom weight split\n";
+        cout << "Enter choice (1-3): ";
+
+        int choice;
+        cin >> choice;
+
+        switch (choice)
+        {
+        case 1:
+            splitType = EQUAL;
+            break;
+        case 2:
+            splitType = PERCENTAGE;
+            cout << "Enter percentages for each participant:\n";
+            for (const auto &p : participants)
+            {
+                double percentage;
+                cout << p << ": ";
+                cin >> percentage;
+                weights.push_back(percentage);
+            }
+            break;
+        case 3:
+            splitType = CUSTOM_WEIGHT;
+            cout << "Enter weights for each participant:\n";
+            for (const auto &p : participants)
+            {
+                double weight;
+                cout << p << ": ";
+                cin >> weight;
+                weights.push_back(weight);
+            }
+            break;
+        default:
+            splitType = EQUAL;
+        }
+
+        Transaction newTransaction(nextTransactionId++, payer, amount, participants,
+                                   description, groupName, splitType, weights);
+        transactions.push_back(newTransaction);
+
+        cout << "Transaction added successfully! ID: " << newTransaction.id << "\n";
     }
-    
-    // Undo last transaction
-    bool undoLastTransaction() {
-        if (undoStack.empty()) {
-            std::cout << "❌ No transactions to undo!\n";
-            return false;
+
+    void deleteTransaction()
+    {
+        cout << "\n--- Delete Transaction ---\n";
+        showAllTransactions();
+
+        cout << "Enter transaction ID to delete: ";
+        int id;
+        cin >> id;
+
+        auto it = find_if(transactions.begin(), transactions.end(),
+                          [id](const Transaction &t)
+                          { return t.id == id; });
+
+        if (it != transactions.end())
+        {
+            transactions.erase(it);
+            cout << "Transaction deleted successfully!\n";
         }
-        
-        Transaction lastTxn = undoStack.top();
-        undoStack.pop();
-        
-        // Reverse the balance updates
-        double splitAmount = lastTxn.amount / (lastTxn.beneficiaries.size() + 1);
-        balances[lastTxn.payer] -= (lastTxn.amount - splitAmount);
-        
-        for (const auto& beneficiary : lastTxn.beneficiaries) {
-            balances[beneficiary] += splitAmount;
+        else
+        {
+            cout << "Transaction not found!\n";
         }
-        
-        // Remove from history
-        transactionHistory.pop_back();
-        
-        std::cout << "✅ Last transaction undone!\n";
-        return true;
     }
-    
-    // Display current balances
-    void showBalances() {
-        std::cout << "\n💰 CURRENT BALANCES - Group: " << currentGroup << "\n";
-        std::cout << std::string(50, '=') << "\n";
-        
-        if (balances.empty()) {
-            std::cout << "No transactions recorded yet.\n";
-            return;
-        }
-        
-        std::vector<std::pair<std::string, double>> sortedBalances;
-        for (const auto& pair : balances) {
-            if (std::abs(pair.second) > 0.01) { // Ignore very small amounts
-                sortedBalances.push_back(pair);
+
+    map<string, double> calculateNetBalance(const string &groupName = "")
+    {
+        map<string, double> netBalance;
+
+        for (const auto &transaction : transactions)
+        {
+            if (transaction.isSettled)
+                continue;
+
+            // Filter by group if specified
+            if (!groupName.empty() && transaction.groupName != groupName)
+                continue;
+
+            double perPersonAmount = 0;
+
+            // Calculate how much each person owes
+            switch (transaction.splitType)
+            {
+            case EQUAL:
+                perPersonAmount = transaction.amount / transaction.participants.size();
+                for (const auto &participant : transaction.participants)
+                {
+                    netBalance[participant] -= perPersonAmount;
+                }
+                break;
+
+            case PERCENTAGE:
+                for (size_t i = 0; i < transaction.participants.size(); i++)
+                {
+                    double owedAmount = transaction.amount * (transaction.weights[i] / 100.0);
+                    netBalance[transaction.participants[i]] -= owedAmount;
+                }
+                break;
+
+            case CUSTOM_WEIGHT:
+            {
+                double totalWeight = 0;
+                for (double weight : transaction.weights)
+                {
+                    totalWeight += weight;
+                }
+                for (size_t i = 0; i < transaction.participants.size(); i++)
+                {
+                    double owedAmount = transaction.amount * (transaction.weights[i] / totalWeight);
+                    netBalance[transaction.participants[i]] -= owedAmount;
+                }
             }
-        }
-        
-        std::sort(sortedBalances.begin(), sortedBalances.end(), 
-                 [](const auto& a, const auto& b) { return a.second > b.second; });
-        
-        for (const auto& pair : sortedBalances) {
-            std::cout << std::setw(15) << pair.first << ": ";
-            if (pair.second > 0) {
-                std::cout << "🟢 Gets Rs." << std::fixed << std::setprecision(2) << pair.second;
-            } else {
-                std::cout << "🔴 Owes Rs." << std::fixed << std::setprecision(2) << -pair.second;
+            break;
             }
-            std::cout << "\n";
+
+            // Add the amount paid by the payer
+            netBalance[transaction.payer] += transaction.amount;
         }
-        std::cout << std::string(50, '=') << "\n";
+
+        // Apply settlements - subtract settled amounts from balances
+        for (const auto &settlement : settlements)
+        {
+            // Filter by group if specified
+            if (!groupName.empty() && settlement.groupName != groupName)
+                continue;
+
+            // Settlement reduces the debt of the payer and the credit of the receiver
+            netBalance[settlement.from] += settlement.amount; // Debtor paid, so their debt reduces
+            netBalance[settlement.to] -= settlement.amount;   // Creditor received, so their credit reduces
+        }
+
+        return netBalance;
     }
-    
-    // Core algorithm: Minimize cash flow using greedy approach with priority queues
-    std::vector<Settlement> minimizeTransactions() {
-        std::vector<Settlement> settlements;
-        
-        // Create max heap for creditors (people who should receive money)
-        std::priority_queue<std::pair<double, std::string>> creditors;
-        
-        // Create max heap for debtors (people who owe money) - use negative values
-        std::priority_queue<std::pair<double, std::string>> debtors;
-        
-        // Populate heaps
-        for (const auto& pair : balances) {
-            if (pair.second > 0.01) {
-                creditors.push({pair.second, pair.first});
-            } else if (pair.second < -0.01) {
-                debtors.push({-pair.second, pair.first}); // Store positive value
+
+    void showBalances()
+    {
+        cout << "\n--- Show Balances ---\n";
+        cout << "1. All balances\n";
+        cout << "2. Group balances\n";
+        cout << "Enter choice: ";
+
+        int choice;
+        cin >> choice;
+
+        string groupName = "";
+        if (choice == 2)
+        {
+            cout << "Available groups: ";
+            for (const auto &group : groups)
+            {
+                cout << group << " ";
+            }
+            cout << "\nEnter group name: ";
+            cin.ignore();
+            getline(cin, groupName);
+        }
+
+        map<string, double> balances = calculateNetBalance(groupName);
+
+        cout << "\n=== Net Balances ===\n";
+        cout << setprecision(2) << fixed;
+
+        for (const auto &balance : balances)
+        {
+            cout << balance.first << ": ";
+            if (balance.second > 0.01)
+            {
+                cout << "Gets Rs." << balance.second << "\n";
+            }
+            else if (balance.second < -0.01)
+            {
+                cout << "Owes Rs." << -balance.second << "\n";
+            }
+            else
+            {
+                cout << "Settled\n";
             }
         }
-        
-        // Greedy matching algorithm
-        while (!creditors.empty() && !debtors.empty()) {
-            auto maxCreditor = creditors.top(); creditors.pop();
-            auto maxDebtor = debtors.top(); debtors.pop();
-            
-            double creditorAmount = maxCreditor.first;
-            double debtorAmount = maxDebtor.first;
-            std::string creditorName = maxCreditor.second;
-            std::string debtorName = maxDebtor.second;
-            
-            double settlementAmount = std::min(creditorAmount, debtorAmount);
-            
-            settlements.emplace_back(debtorName, creditorName, settlementAmount);
-            
-            // Update remaining amounts and push back if not settled
-            creditorAmount -= settlementAmount;
-            debtorAmount -= settlementAmount;
-            
-            if (creditorAmount > 0.01) {
-                creditors.push({creditorAmount, creditorName});
+    }
+
+    vector<pair<string, string>> minimizeTransactions(const string &groupName = "")
+    {
+        map<string, double> netBalance = calculateNetBalance(groupName);
+        vector<pair<string, string>> settlements;
+
+        vector<pair<string, double>> creditors, debtors;
+
+        for (const auto &balance : netBalance)
+        {
+            if (balance.second > 0.01)
+            {
+                creditors.push_back({balance.first, balance.second});
             }
-            if (debtorAmount > 0.01) {
-                debtors.push({debtorAmount, debtorName});
+            else if (balance.second < -0.01)
+            {
+                debtors.push_back({balance.first, -balance.second});
             }
         }
-        
+
+        cout << "\n=== Optimized Settlement Plan ===\n";
+        cout << setprecision(2) << fixed;
+
+        if (creditors.empty() && debtors.empty())
+        {
+            cout << "All settlements are complete! No pending transactions.\n";
+            return settlements;
+        }
+
+        size_t i = 0, j = 0;
+        while (i < creditors.size() && j < debtors.size())
+        {
+            double settleAmount = min(creditors[i].second, debtors[j].second);
+
+            cout << debtors[j].first << " ---> " << creditors[i].first
+                 << ": Rs." << settleAmount << "\n";
+
+            settlements.push_back({debtors[j].first, creditors[i].first});
+
+            creditors[i].second -= settleAmount;
+            debtors[j].second -= settleAmount;
+
+            if (creditors[i].second < 0.01)
+                i++;
+            if (debtors[j].second < 0.01)
+                j++;
+        }
+
         return settlements;
     }
-    
-    // Display optimized settlements
-    void showOptimizedSettlements() {
-        auto settlements = minimizeTransactions();
-        
-        std::cout << "\n🎯 OPTIMIZED SETTLEMENTS\n";
-        std::cout << std::string(50, '=') << "\n";
-        
-        if (settlements.empty()) {
-            std::cout << "✅ All debts are already settled!\n";
-            return;
-        }
-        
-        std::cout << "Minimum " << settlements.size() << " transaction(s) needed:\n\n";
-        
-        int count = 1;
-        for (const auto& settlement : settlements) {
-            std::cout << count++ << ". " << settlement.from << " → " << settlement.to 
-                      << ": Rs." << std::fixed << std::setprecision(2) << settlement.amount << "\n";
-        }
-        
-        std::cout << "\n💡 This reduces complexity from potentially " 
-                  << balances.size() * (balances.size() - 1) / 2 
-                  << " to just " << settlements.size() << " transactions!\n";
-        std::cout << std::string(50, '=') << "\n";
-    }
-    
-    // Show transaction history
-    void showTransactionHistory() {
-        std::cout << "\n📋 TRANSACTION HISTORY\n";
-        std::cout << std::string(60, '=') << "\n";
-        
-        if (transactionHistory.empty()) {
-            std::cout << "No transactions recorded.\n";
-            return;
-        }
-        
-        for (size_t i = 0; i < transactionHistory.size(); ++i) {
-            const auto& txn = transactionHistory[i];
-            std::cout << i + 1 << ". ";
-            std::cout << txn.payer << " paid Rs." << std::fixed << std::setprecision(2) << txn.amount;
-            std::cout << " for: ";
-            
-            for (size_t j = 0; j < txn.beneficiaries.size(); ++j) {
-                std::cout << txn.beneficiaries[j];
-                if (j < txn.beneficiaries.size() - 1) std::cout << ", ";
-            }
-            
-            if (!txn.description.empty()) {
-                std::cout << " (" << txn.description << ")";
-            }
-            
-            std::cout << "\n";
-        }
-        std::cout << std::string(60, '=') << "\n";
-    }
-    
-    // Save data to file
-    bool saveToFile(const std::string& filename) {
-        std::ofstream file(filename);
-        if (!file.is_open()) {
-            std::cout << "❌ Error opening file for writing!\n";
-            return false;
-        }
-        
-        file << "GROUP:" << currentGroup << "\n";
-        
-        for (const auto& txn : transactionHistory) {
-            file << "TXN:" << txn.payer << "|" << txn.amount << "|";
-            for (size_t i = 0; i < txn.beneficiaries.size(); ++i) {
-                file << txn.beneficiaries[i];
-                if (i < txn.beneficiaries.size() - 1) file << ",";
-            }
-            file << "|" << txn.description << "\n";
-        }
-        
-        file.close();
-        std::cout << "✅ Data saved to " << filename << "\n";
-        return true;
-    }
-    
-    // Load data from file
-    bool loadFromFile(const std::string& filename) {
-        std::ifstream file(filename);
-        if (!file.is_open()) {
-            std::cout << "❌ Error opening file for reading!\n";
-            return false;
-        }
-        
-        // Clear current state
-        balances.clear();
-        transactionHistory.clear();
-        
-        std::string line;
-        while (std::getline(file, line)) {
-            if (line.substr(0, 6) == "GROUP:") {
-                currentGroup = line.substr(6);
-            } else if (line.substr(0, 4) == "TXN:") {
-                std::string txnData = line.substr(4);
-                auto parts = split(txnData, '|');
-                
-                if (parts.size() >= 3) {
-                    std::string payer = parts[0];
-                    double amount = std::stod(parts[1]);
-                    auto beneficiaries = split(parts[2], ',');
-                    std::string description = (parts.size() > 3) ? parts[3] : "";
-                    
-                    addTransaction(payer, amount, beneficiaries, description);
+
+    void settleDebt()
+    {
+        cout << "\n--- Settle Debt ---\n";
+
+        // First show current balances to help user understand what needs to be settled
+        cout << "Current outstanding balances:\n";
+        map<string, double> currentBalances = calculateNetBalance();
+        cout << setprecision(2) << fixed;
+
+        for (const auto &balance : currentBalances)
+        {
+            if (fabs(balance.second) > 0.01)
+            {
+                cout << balance.first << ": ";
+                if (balance.second > 0)
+                {
+                    cout << "Gets Rs." << balance.second << "\n";
+                }
+                else
+                {
+                    cout << "Owes Rs." << -balance.second << "\n";
                 }
             }
         }
-        
-        file.close();
-        std::cout << "✅ Data loaded from " << filename << "\n";
-        return true;
+
+        string from, to, groupName;
+        double amount;
+
+        cout << "\nEnter debtor name (who is paying): ";
+        cin.ignore();
+        getline(cin, from);
+
+        cout << "Enter creditor name (who is receiving): ";
+        getline(cin, to);
+
+        cout << "Enter settlement amount: Rs.";
+        cin >> amount;
+
+        cout << "Is this for a group? (y/n): ";
+        char isGroup;
+        cin >> isGroup;
+
+        if (tolower(isGroup) == 'y')
+        {
+            cout << "Available groups: ";
+            for (const auto &group : groups)
+            {
+                cout << group << " ";
+            }
+            cout << "\nEnter group name: ";
+            cin.ignore();
+            getline(cin, groupName);
+        }
+
+        // Validate settlement
+        map<string, double> balances = calculateNetBalance(groupName);
+
+        // Check if the debtor actually owes money
+        if (balances[from] >= -0.01)
+        {
+            cout << "Warning: " << from << " doesn't owe money";
+            if (!groupName.empty())
+                cout << " in group " << groupName;
+            cout << ".\n";
+        }
+
+        // Check if the creditor is owed money
+        if (balances[to] <= 0.01)
+        {
+            cout << "Warning: " << to << " is not owed money";
+            if (!groupName.empty())
+                cout << " in group " << groupName;
+            cout << ".\n";
+        }
+
+        // Check if settlement amount is reasonable
+        double maxSettleable = min(fabs(min(0.0, balances[from])), max(0.0, balances[to]));
+        if (amount > maxSettleable + 0.01)
+        {
+            cout << "Warning: Settlement amount (Rs." << amount
+                 << ") is more than the outstanding debt (Rs." << maxSettleable << ").\n";
+            cout << "Do you want to continue? (y/n): ";
+            char confirm;
+            cin >> confirm;
+            if (tolower(confirm) != 'y')
+            {
+                cout << "Settlement cancelled.\n";
+                return;
+            }
+        }
+
+        // Record settlement
+        Settlement settlement(0, from, to, amount, groupName);
+        settlements.push_back(settlement);
+
+        cout << "Settlement recorded successfully!\n";
+        cout << from << " paid Rs." << amount << " to " << to;
+        if (!groupName.empty())
+        {
+            cout << " for group: " << groupName;
+        }
+        cout << "\n";
+
+        // Show updated balances after settlement
+        cout << "\nUpdated balances after settlement:\n";
+        map<string, double> updatedBalances = calculateNetBalance(groupName);
+
+        bool hasOutstanding = false;
+        for (const auto &balance : updatedBalances)
+        {
+            if (fabs(balance.second) > 0.01)
+            {
+                cout << balance.first << ": ";
+                if (balance.second > 0)
+                {
+                    cout << "Gets Rs." << balance.second << "\n";
+                }
+                else
+                {
+                    cout << "Owes Rs." << -balance.second << "\n";
+                }
+                hasOutstanding = true;
+            }
+        }
+
+        if (!hasOutstanding)
+        {
+            cout << "🎉 All debts settled!";
+            if (!groupName.empty())
+            {
+                cout << " for group " << groupName;
+            }
+            cout << "\n";
+        }
     }
-    
-    // Interactive CLI
-    void runInteractiveCLI() {
-        std::cout << "\n🎉 Welcome to Splitwise Cash Flow Minimizer!\n";
-        std::cout << "Group: " << currentGroup << "\n";
-        std::cout << std::string(50, '=') << "\n";
-        
-        while (true) {
-            std::cout << "\n📋 MENU:\n";
-            std::cout << "1. Add Transaction\n";
-            std::cout << "2. Show Balances\n";
-            std::cout << "3. Show Optimized Settlements\n";
-            std::cout << "4. Show Transaction History\n";
-            std::cout << "5. Undo Last Transaction\n";
-            std::cout << "6. Save to File\n";
-            std::cout << "7. Load from File\n";
-            std::cout << "8. Exit\n";
-            std::cout << "\nEnter your choice (1-8): ";
-            
+
+    void showAllTransactions()
+    {
+        cout << "\n=== All Transactions ===\n";
+        cout << setprecision(2) << fixed;
+
+        if (transactions.empty())
+        {
+            cout << "No transactions found.\n";
+            return;
+        }
+
+        for (const auto &transaction : transactions)
+        {
+            cout << "ID: " << transaction.id << " | " << transaction.payer
+                 << " paid Rs." << transaction.amount;
+
+            if (!transaction.groupName.empty())
+            {
+                cout << " [Group: " << transaction.groupName << "]";
+            }
+
+            cout << "\n  Description: " << transaction.description;
+            cout << "\n  Participants: ";
+            for (size_t i = 0; i < transaction.participants.size(); i++)
+            {
+                cout << transaction.participants[i];
+                if (i < transaction.participants.size() - 1)
+                    cout << ", ";
+            }
+            cout << "\n  Date: " << transaction.date;
+            cout << "\n  Status: " << (transaction.isSettled ? "Settled" : "Active") << "\n";
+            cout << "----------------------------------------\n";
+        }
+    }
+
+    void searchTransactions()
+    {
+        cout << "\n--- Search/Filter Transactions ---\n";
+        cout << "1. Filter by person\n";
+        cout << "2. Filter by group\n";
+        cout << "3. Filter by amount range\n";
+        cout << "Enter choice: ";
+
+        int choice;
+        cin >> choice;
+
+        vector<Transaction> filtered;
+
+        switch (choice)
+        {
+        case 1:
+        {
+            string person;
+            cout << "Enter person name: ";
+            cin.ignore();
+            getline(cin, person);
+
+            for (const auto &t : transactions)
+            {
+                if (t.payer == person ||
+                    find(t.participants.begin(), t.participants.end(), person) != t.participants.end())
+                {
+                    filtered.push_back(t);
+                }
+            }
+            break;
+        }
+        case 2:
+        {
+            string group;
+            cout << "Enter group name: ";
+            cin.ignore();
+            getline(cin, group);
+
+            for (const auto &t : transactions)
+            {
+                if (t.groupName == group)
+                {
+                    filtered.push_back(t);
+                }
+            }
+            break;
+        }
+        case 3:
+        {
+            double minAmount, maxAmount;
+            cout << "Enter minimum amount: Rs.";
+            cin >> minAmount;
+            cout << "Enter maximum amount: Rs.";
+            cin >> maxAmount;
+
+            for (const auto &t : transactions)
+            {
+                if (t.amount >= minAmount && t.amount <= maxAmount)
+                {
+                    filtered.push_back(t);
+                }
+            }
+            break;
+        }
+        }
+
+        cout << "\n=== Filtered Results ===\n";
+        if (filtered.empty())
+        {
+            cout << "No transactions found matching the criteria.\n";
+            return;
+        }
+
+        for (const auto &transaction : filtered)
+        {
+            cout << "ID: " << transaction.id << " | " << transaction.payer
+                 << " paid Rs." << transaction.amount;
+
+            if (!transaction.groupName.empty())
+            {
+                cout << " [Group: " << transaction.groupName << "]";
+            }
+            cout << "\n  Description: " << transaction.description << "\n";
+            cout << "----------------------------------------\n";
+        }
+    }
+
+    void showPersonalTransactions()
+    {
+        cout << "\n--- Personal View ---\n";
+        string person;
+        cout << "Enter your name: ";
+        cin.ignore();
+        getline(cin, person);
+
+        cout << "\n=== Your Transactions ===\n";
+        cout << setprecision(2) << fixed;
+
+        bool hasTransactions = false;
+        for (const auto &transaction : transactions)
+        {
+            bool involved = (transaction.payer == person ||
+                             find(transaction.participants.begin(), transaction.participants.end(), person) != transaction.participants.end());
+
+            if (involved)
+            {
+                hasTransactions = true;
+                cout << "ID: " << transaction.id << " | ";
+
+                // Calculate this person's share in the transaction
+                double personShare = 0.0;
+                switch (transaction.splitType)
+                {
+                case EQUAL:
+                    personShare = transaction.amount / transaction.participants.size();
+                    break;
+                case PERCENTAGE:
+                    for (size_t i = 0; i < transaction.participants.size(); i++)
+                    {
+                        if (transaction.participants[i] == person)
+                        {
+                            personShare = transaction.amount * (transaction.weights[i] / 100.0);
+                            break;
+                        }
+                    }
+                    break;
+                case CUSTOM_WEIGHT:
+                {
+                    double totalWeight = 0;
+                    for (double weight : transaction.weights)
+                    {
+                        totalWeight += weight;
+                    }
+                    for (size_t i = 0; i < transaction.participants.size(); i++)
+                    {
+                        if (transaction.participants[i] == person)
+                        {
+                            personShare = transaction.amount * (transaction.weights[i] / totalWeight);
+                            break;
+                        }
+                    }
+                }
+                break;
+                }
+
+                if (transaction.payer == person)
+                {
+                    cout << "You paid Rs." << transaction.amount
+                         << " (Your share: Rs." << personShare << ")";
+                }
+                else
+                {
+                    cout << transaction.payer << " paid Rs." << transaction.amount
+                         << " (Your share: Rs." << personShare << ")";
+                }
+
+                if (!transaction.groupName.empty())
+                {
+                    cout << " [Group: " << transaction.groupName << "]";
+                }
+                else
+                {
+                    cout << " [Personal]";
+                }
+
+                cout << "\n  Description: " << transaction.description << "\n";
+                cout << "----------------------------------------\n";
+            }
+        }
+
+        if (!hasTransactions)
+        {
+            cout << "No transactions found for " << person << ".\n";
+        }
+
+        // Show personal balance
+        map<string, double> allBalances = calculateNetBalance();
+        if (allBalances.find(person) != allBalances.end())
+        {
+            cout << "\nYour overall balance: ";
+            double balance = allBalances[person];
+            if (balance > 0.01)
+            {
+                cout << "You get Rs." << balance << "\n";
+            }
+            else if (balance < -0.01)
+            {
+                cout << "You owe Rs." << -balance << "\n";
+            }
+            else
+            {
+                cout << "Settled\n";
+            }
+        }
+        else
+        {
+            cout << "\nYour overall balance: Settled\n";
+        }
+    }
+
+    void showSettlementHistory()
+    {
+        cout << "\n=== Settlement History ===\n";
+        cout << setprecision(2) << fixed;
+
+        if (settlements.empty())
+        {
+            cout << "No settlements recorded yet.\n";
+            return;
+        }
+
+        for (const auto &settlement : settlements)
+        {
+            cout << settlement.from << " ---> " << settlement.to
+                 << ": Rs." << settlement.amount;
+
+            if (!settlement.groupName.empty())
+            {
+                cout << " [Group: " << settlement.groupName << "]";
+            }
+            else
+            {
+                cout << " [Personal]";
+            }
+
+            cout << "\n  Date: " << settlement.date << "\n";
+            cout << "----------------------------------------\n";
+        }
+    }
+
+    void showMenu()
+    {
+        cout << "\n======= SplitWise Clone =======\n";
+        cout << "1.  Add Transaction\n";
+        cout << "2.  Delete Transaction\n";
+        cout << "3.  Show Balances\n";
+        cout << "4.  Minimize Transactions\n";
+        cout << "5.  Settle Debt\n";
+        cout << "6.  Show All Transactions\n";
+        cout << "7.  Search/Filter Transactions\n";
+        cout << "8.  Personal Transaction View\n";
+        cout << "9.  Settlement History\n";
+        cout << "10. Exit\n";
+        cout << "===============================\n";
+        cout << "Enter your choice: ";
+    }
+
+    void run()
+    {
+        cout << "Welcome to SplitWise Clone!\n";
+
+        while (true)
+        {
+            showMenu();
+
             int choice;
-            std::cin >> choice;
-            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-            
-            switch (choice) {
-                case 1: {
-                    std::string payer, beneficiariesStr, description;
-                    double amount;
-                    
-                    std::cout << "Enter payer name: ";
-                    std::getline(std::cin, payer);
-                    
-                    std::cout << "Enter amount: Rs.";
-                    std::cin >> amount;
-                    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-                    
-                    std::cout << "Enter beneficiaries (comma-separated): ";
-                    std::getline(std::cin, beneficiariesStr);
-                    auto beneficiaries = split(beneficiariesStr, ',');
-                    
-                    std::cout << "Enter description (optional): ";
-                    std::getline(std::cin, description);
-                    
-                    addTransaction(payer, amount, beneficiaries, description);
-                    break;
+            cin >> choice;
+
+            switch (choice)
+            {
+            case 1:
+                addTransaction();
+                break;
+            case 2:
+                deleteTransaction();
+                break;
+            case 3:
+                showBalances();
+                break;
+            case 4:
+            {
+                cout << "1. Minimize all transactions\n";
+                cout << "2. Minimize group transactions\n";
+                cout << "Enter choice: ";
+                int minChoice;
+                cin >> minChoice;
+
+                if (minChoice == 2)
+                {
+                    cout << "Available groups: ";
+                    for (const auto &group : groups)
+                    {
+                        cout << group << " ";
+                    }
+                    cout << "\nEnter group name: ";
+                    string groupName;
+                    cin.ignore();
+                    getline(cin, groupName);
+                    minimizeTransactions(groupName);
                 }
-                case 2:
-                    showBalances();
-                    break;
-                case 3:
-                    showOptimizedSettlements();
-                    break;
-                case 4:
-                    showTransactionHistory();
-                    break;
-                case 5:
-                    undoLastTransaction();
-                    break;
-                case 6: {
-                    std::string filename;
-                    std::cout << "Enter filename to save: ";
-                    std::getline(std::cin, filename);
-                    saveToFile(filename);
-                    break;
+                else
+                {
+                    minimizeTransactions();
                 }
-                case 7: {
-                    std::string filename;
-                    std::cout << "Enter filename to load: ";
-                    std::getline(std::cin, filename);
-                    loadFromFile(filename);
-                    break;
-                }
-                case 8:
-                    std::cout << "👋 Thanks for using Cash Flow Minimizer!\n";
-                    return;
-                default:
-                    std::cout << "❌ Invalid choice! Please try again.\n";
             }
+            break;
+            case 5:
+                settleDebt();
+                break;
+            case 6:
+                showAllTransactions();
+                break;
+            case 7:
+                searchTransactions();
+                break;
+            case 8:
+                showPersonalTransactions();
+                break;
+            case 9:
+                showSettlementHistory();
+                break;
+            case 10:
+                cout << "Thank you for using SplitWise Clone!\n";
+                return;
+            default:
+                cout << "Invalid choice! Please try again.\n";
+            }
+
+            cout << "\nPress Enter to continue...";
+            cin.ignore();
+            cin.get();
         }
     }
 };
 
-// Demo function to showcase features
-void runDemo() {
-    CashFlowMinimizer minimizer("Friends Trip");
-    
-    std::cout << "\n🎪 DEMO: Friend Trip Expenses\n";
-    std::cout << std::string(50, '=') << "\n";
-    
-    // Add sample transactions
-    minimizer.addTransaction("Alice", 1200, {"Bob", "Charlie"}, "Hotel booking");
-    minimizer.addTransaction("Bob", 900, {"Alice", "Charlie"}, "Food expenses");
-    minimizer.addTransaction("Charlie", 600, {"Alice", "Bob"}, "Transportation");
-    minimizer.addTransaction("Alice", 300, {"Bob"}, "Movie tickets");
-    
-    minimizer.showBalances();
-    minimizer.showOptimizedSettlements();
-    minimizer.showTransactionHistory();
-}
-
-int main() {
-    std::cout << "🏦 SPLITWISE CASH FLOW MINIMIZER\n";
-    std::cout << "Advanced C++ Project with Graph Algorithms\n";
-    std::cout << std::string(50, '=') << "\n";
-    
-    int mode;
-    std::cout << "Choose mode:\n";
-    std::cout << "1. Interactive Mode\n";
-    std::cout << "2. Demo Mode\n";
-    std::cout << "Enter choice (1-2): ";
-    std::cin >> mode;
-    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-    
-    if (mode == 1) {
-        std::string groupName;
-        std::cout << "Enter group name (or press Enter for 'Default'): ";
-        std::getline(std::cin, groupName);
-        if (groupName.empty()) groupName = "Default";
-        
-        CashFlowMinimizer minimizer(groupName);
-        minimizer.runInteractiveCLI();
-    } else if (mode == 2) {
-        runDemo();
-    } else {
-        std::cout << "Invalid choice!\n";
-    }
-    
+int main()
+{
+    SplitWiseApp app;
+    app.run();
     return 0;
 }
